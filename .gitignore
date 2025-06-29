@@ -1,0 +1,31 @@
+# Node.js dependencies
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test and temp artifacts
+*.zip
+*.log
+*.tmp
+test-advanced/
+test-advanced-zip-output/
+test_fs_mcp/
+test_dir_ops/
+Desktop/test_saveContentToFile_*
+Desktop/test_exportContent_*
+Desktop/test_exportContent_src_*
+Desktop/test_exportContent_exported_*
+
+# VSCode
+.vscode/
+
+# Environment
+.env
