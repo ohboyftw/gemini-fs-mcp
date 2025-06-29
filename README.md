@@ -32,15 +32,19 @@ This tool offers the following functionalities:
 - **`getDirectoryInfo`**: Gets information about a directory (number of files and subdirectories).
 
 ### Archiving and Compression
-- **`zipDirectory`**: Compresses a directory into a zip file.
-- **`unzipFile`**: Extracts the contents of a zip file.
+- **`zipDirectory`**: Compresses a directory into a zip file. Requires `archiver` and `fs-extra` packages.
+- **`unzipFile`**: Extracts the contents of a zip file. Requires `yauzl` and `fs-extra` packages.
 
 ### Security and Permissions
-- **`changePermissions`**: Changes the permissions of a file or directory.
+- **`changePermissions`**: Changes the permissions of a file or directory. Requires an octal permission mode (e.g., 0o755 for rwxr-xr-x).
 
 ### User Experience and Convenience
 - **`listRecentFiles`**: Lists the most recently modified files in a directory.
 - **`searchFiles`**: Searches for files based on their name, size, or modification date.
+
+### Content Management
+- **`saveContentToFile`**: Saves provided content to a specified file. Can be used to store results from other MCPs.
+- **`exportContent`**: Exports user-specified text or file as markdown or PDF.
 
 ## Author
 

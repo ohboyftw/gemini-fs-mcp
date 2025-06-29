@@ -442,7 +442,7 @@ function getToolDefinition() {
             },
             {
                 name: 'replaceString',
-                description: 'Replaces a string in a specified file.',
+                description: 'Replaces all occurrences of a string in a specified file.',
                 schema: {
                     properties: {
                         filePath: { type: 'string', description: 'Path to the file. e.g., "Documents/my_notes.txt".' },
@@ -528,7 +528,7 @@ function getToolDefinition() {
             },
             {
                 name: 'getFileInfo',
-                description: 'Gets information about a file.',
+                description: 'Gets information about a file (size, creation date, modification date, etc.).',
                 schema: {
                     properties: {
                         filePath: { type: 'string', description: 'Path to the file. e.g., "Documents/my_notes.txt".' },
@@ -538,7 +538,7 @@ function getToolDefinition() {
             },
             {
                 name: 'getDirectoryInfo',
-                description: 'Gets information about a directory.',
+                description: 'Gets information about a directory (number of files and subdirectories).',
                 schema: {
                     properties: {
                         directoryPath: { type: 'string', description: 'Path to the directory. e.g., "Documents/my_folder".' },
@@ -603,7 +603,7 @@ function getToolDefinition() {
             },
             {
                 name: 'changePermissions',
-                description: 'Changes the permissions of a file or directory.',
+                description: 'Changes the permissions of a file or directory. Requires an octal permission mode (e.g., 0o755 for rwxr-xr-x).',
                 schema: {
                     properties: {
                         filePath: { type: 'string', description: 'Path to the file or directory. e.g., "Documents/my_file.txt".' },
