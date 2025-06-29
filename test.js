@@ -1,12 +1,212 @@
-const { expect } = require('chai');
+const chai = require('chai');
+const chaiAsPromised = require('chai-as-promised');
+chai.use(chaiAsPromised.default);
+const { expect } = chai;
+const {
+  zipDirectory, unzipFile, changePermissions, listRecentFiles, searchFiles,
+  exportContent, saveContentToFile, getFileInfo, getDirectoryInfo,
+  appendToFile, prependToFile, searchInFile,
+  listFiles, readFile, createFile, editFile, replaceString,
+  createDirectory, deleteDirectory, renameDirectory, moveDirectory
+} = require('./server.js');
 const os = require('os');
 const path = require('path');
 const fs = require('fs').promises;
-const { saveContentToFile } = require('./server');
-const { listFiles, readFile, createFile, editFile, replaceString, deleteFile, deleteDirectory, renameFile, renameDirectory, moveFile, moveDirectory, createDirectory, getFileInfo, getDirectoryInfo, appendToFile, prependToFile, searchInFile, zipDirectory, unzipFile, changePermissions, listRecentFiles, searchFiles } = require('./server.js');
 
-// Helper to get a path relative to the home directory
-const getHomeRelativePath = (p) => path.relative(os.homedir(), p);
+// Helper to create and clean up test files/directories
+async function setupTestDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
+}
+async function cleanupTestDir(dir) {
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+describe('Advanced and Edge Case Tests', () => {
+  const home = os.homedir();
+  const testDir = path.join(home, 'test-advanced');
+  const testFile = path.join(testDir, 'file.txt');
+  const testFile2 = path.join(testDir, 'file2.txt');
+  const zipPath = path.join(testDir, 'archive.zip');
+  const unzipDir = path.join(testDir, 'unzipped');
+  const exportMd = path.join(testDir, 'export.md');
+  const exportPdf = path.join(testDir, 'export.pdf');
+
+  before(async () => {
+    await setupTestDir(testDir);
+    await fs.writeFile(testFile, 'Hello\nWorld\nTest\n');
+    await fs.writeFile(testFile2, 'Another file\n');
+  });
+
+  after(async () => {
+    await cleanupTestDir(testDir);
+  });
+
+  // --- ZIP/UNZIP ---
+  it('zipDirectory and unzipFile: round-trip', async () => {
+    // Use a sibling directory in the home directory for the archive
+    const home = os.homedir();
+    const zipOutputDir = path.join(home, 'test-advanced-zip-output');
+    const archivePath = path.join(zipOutputDir, 'archive.zip');
+    const unzipPath = path.join(home, 'test-advanced', 'unzipped');
+
+    // Clean up any previous runs
+    try { await fs.rm(zipOutputDir, { recursive: true, force: true }); } catch (e) {}
+    try { await fs.rm(unzipPath, { recursive: true, force: true }); } catch (e) {}
+    await fs.mkdir(zipOutputDir, { recursive: true });
+
+    await zipDirectory({ directoryPath: 'test-advanced', outputPath: path.relative(home, archivePath) });
+    await unzipFile({ filePath: path.relative(home, archivePath), destinationPath: 'test-advanced/unzipped' });
+    const files = await fs.readdir(unzipPath);
+    expect(files).to.have.members(['file.txt', 'file2.txt']);
+    await fs.unlink(archivePath);
+    // Optionally clean up the zip output dir
+    try { await fs.rmdir(zipOutputDir); } catch (e) {}
+  });
+
+  it('zipDirectory: error on non-existent directory', async () => {
+    await expect(zipDirectory({ directoryPath: 'does-not-exist', outputPath: 'test-advanced/shouldnot.zip' }))
+      .to.be.rejectedWith(/ENOENT|not exist/i);
+  });
+
+  // --- PERMISSIONS ---
+  it('changePermissions: changes file mode', async () => {
+    // Only test that it does not throw (Windows ignores mode bits)
+    await expect(changePermissions({ filePath: 'test-advanced/file.txt', mode: 0o644 })).to.eventually.not.be.undefined;
+  });
+
+  it('changePermissions: error on non-existent file', async () => {
+    await expect(changePermissions({ filePath: 'test-advanced/nope.txt', mode: 0o644 }))
+      .to.be.rejectedWith(/not found/i);
+  });
+
+  // --- RECENT FILES ---
+  it('listRecentFiles: returns most recent files', async () => {
+    try { await fs.unlink(path.join(testDir, 'archive.zip')); } catch (e) {}
+    const result = await listRecentFiles({ directoryPath: 'test-advanced', limit: 1 });
+    expect(result.content.length).to.equal(1);
+    expect(result.content[0].name).to.match(/file/);
+  });
+
+  it('listRecentFiles: error on non-existent directory', async () => {
+    await expect(listRecentFiles({ directoryPath: 'does-not-exist' }))
+      .to.be.rejectedWith(/not found/i);
+  });
+
+  // --- SEARCH FILES ---
+  it('searchFiles: finds file by name pattern', async () => {
+    const result = await searchFiles({ directoryPath: 'test-advanced', fileNamePattern: 'file' });
+    expect(result.content.some(f => f.name === 'file.txt')).to.be.true;
+  });
+
+  it('searchFiles: respects minSize/maxSize', async () => {
+    const result = await searchFiles({ directoryPath: 'test-advanced', minSize: 1, maxSize: 5 });
+    expect(result.content.length).to.equal(0); // All files are larger
+  });
+
+  // --- EXPORT CONTENT ---
+  it('exportContent: exports text as markdown', async () => {
+    const result = await exportContent({
+      sourceType: 'text',
+      source: '# Title\nSome text',
+      format: 'md',
+      outputPath: 'test-advanced/export.md'
+    });
+    expect(result.content).to.match(/Successfully exported as markdown/);
+    const md = await fs.readFile(exportMd, 'utf8');
+    expect(md).to.include('# Title');
+    expect(md).to.include('Some text');
+  });
+
+  it('exportContent: exports file as PDF', async () => {
+    const result = await exportContent({
+      sourceType: 'file',
+      source: 'test-advanced/file.txt',
+      format: 'pdf',
+      outputPath: 'test-advanced/export.pdf'
+    });
+    expect(result.content).to.match(/Successfully exported as PDF/);
+    const stat = await fs.stat(exportPdf);
+    expect(stat.size).to.be.greaterThan(0);
+  });
+
+  it('exportContent: error on invalid sourceType', async () => {
+    await expect(exportContent({
+      sourceType: 'invalid',
+      source: 'foo',
+      format: 'md',
+      outputPath: 'test-advanced/err.md'
+    })).to.be.rejectedWith(/Invalid sourceType/);
+  });
+
+  it('exportContent: error on invalid format', async () => {
+    await expect(exportContent({
+      sourceType: 'text',
+      source: 'foo',
+      format: 'docx',
+      outputPath: 'test-advanced/err.docx'
+    })).to.be.rejectedWith(/Invalid format/);
+  });
+
+  // --- SAVE CONTENT TO FILE ---
+  it('saveContentToFile: creates and overwrites file', async () => {
+    await saveContentToFile({ filePath: 'test-advanced/new.txt', content: 'abc', overwrite: false });
+    await expect(saveContentToFile({ filePath: 'test-advanced/new.txt', content: 'def', overwrite: false }))
+      .to.be.rejectedWith(/already exists/i);
+    await saveContentToFile({ filePath: 'test-advanced/new.txt', content: 'def', overwrite: true });
+    const txt = await fs.readFile(path.join(testDir, 'new.txt'), 'utf8');
+    expect(txt).to.equal('def');
+  });
+
+  // --- FILE/DIR INFO EDGE CASES ---
+  it('getFileInfo: error on non-existent file', async () => {
+    await expect(getFileInfo({ filePath: 'test-advanced/nope.txt' }))
+      .to.be.rejectedWith(/ENOENT|not exist/i);
+  });
+
+  it('getDirectoryInfo: error on non-existent directory', async () => {
+    await expect(getDirectoryInfo({ directoryPath: 'test-advanced/nope' }))
+      .to.be.rejectedWith(/ENOENT|not exist/i);
+  });
+
+  // --- APPEND/PREPEND/SEARCH EDGE CASES ---
+  it('appendToFile: error on non-existent file', async () => {
+    await expect(appendToFile({ filePath: 'test-advanced/nope.txt', content: 'x' }))
+      .to.be.rejectedWith(/ENOENT|not exist/i);
+  });
+
+  it('prependToFile: error on non-existent file', async () => {
+    await expect(prependToFile({ filePath: 'test-advanced/nope.txt', content: 'x' }))
+      .to.be.rejectedWith(/ENOENT|not exist/i);
+  });
+
+  it('searchInFile: finds matching lines', async () => {
+    const result = await searchInFile({ filePath: 'test-advanced/file.txt', pattern: 'World' });
+    expect(result.content.length).to.equal(1);
+    expect(result.content[0].lineContent).to.equal('World');
+    await expect(searchInFile({ filePath: 'test-advanced/nope.txt', pattern: 'x' }))
+      .to.be.rejectedWith(/not found/i);
+  });
+
+  // --- SECURITY: PATH TRAVERSAL ---
+  it('rejects path traversal in all operations', async () => {
+    const badPaths = [
+      '../outside.txt',
+      '..\\outside.txt',
+      '/etc/passwd',
+      '\\\\evil\\share',
+      'C:\\Windows\\system32\\cmd.exe'
+    ];
+    for (const bad of badPaths) {
+      await expect(getFileInfo({ filePath: bad })).to.be.rejectedWith(/restricted/i);
+      await expect(getDirectoryInfo({ directoryPath: bad })).to.be.rejectedWith(/restricted/i);
+      await expect(appendToFile({ filePath: bad, content: 'x' })).to.be.rejectedWith(/restricted/i);
+      await expect(prependToFile({ filePath: bad, content: 'x' })).to.be.rejectedWith(/restricted/i);
+      await expect(searchInFile({ filePath: bad, pattern: 'x' })).to.be.rejectedWith(/restricted/i);
+      await expect(saveContentToFile({ filePath: bad, content: 'x', overwrite: true })).to.be.rejectedWith(/restricted/i);
+      await expect(exportContent({ sourceType: 'file', source: bad, format: 'md', outputPath: 'test-advanced/evil.md' })).to.be.rejectedWith(/restricted/i);
+    }
+  });
+});
 
 describe('File System Operations', () => {
     const testDir = path.join(os.homedir(), 'test_fs_mcp');
@@ -40,12 +240,8 @@ describe('File System Operations', () => {
         });
 
         it('should throw an error if the file does not exist', async () => {
-            try {
-                await readFile({ filePath: getHomeRelativePath(path.join(testDir, 'non_existent_file.txt')) });
-                expect.fail('readFile did not throw an error for a non-existent file');
-            } catch (error) {
-                expect(error.message).to.include('ENOENT');
-            }
+            await expect(readFile({ filePath: getHomeRelativePath(path.join(testDir, 'non_existent_file.txt')) }))
+                .to.be.rejectedWith(/ENOENT/);
         });
     });
 
@@ -70,12 +266,8 @@ describe('File System Operations', () => {
 
         it('should throw an error if the file already exists', async () => {
             await createFile({ filePath: getHomeRelativePath(newFile), content: 'Initial content' });
-            try {
-                await createFile({ filePath: getHomeRelativePath(newFile), content: 'New content' });
-                expect.fail('createFile did not throw an error for an existing file');
-            } catch (error) {
-                expect(error.message).to.include('File already exists');
-            }
+            await expect(createFile({ filePath: getHomeRelativePath(newFile), content: 'New content' }))
+                .to.be.rejectedWith(/File already exists/);
         });
     });
 
@@ -106,30 +298,20 @@ describe('File System Operations', () => {
         });
 
         it('should throw an error if oldContent is not found', async () => {
-            try {
-                await editFile({
-                    filePath: getHomeRelativePath(editableFile),
-                    oldContent: 'non-existent content',
-                    newContent: 'new content',
-                });
-                expect.fail('editFile did not throw an error for non-existent oldContent');
-            } catch (error) {
-                expect(error.message).to.include('No changes made to file');
-            }
+            await expect(editFile({
+                filePath: getHomeRelativePath(editableFile),
+                oldContent: 'non-existent content',
+                newContent: 'new content',
+            })).to.be.rejectedWith(/No changes made to file/);
         });
 
         it('should throw an error if oldContent is not unique', async () => {
             await fs.writeFile(editableFile, 'duplicate content duplicate content');
-            try {
-                await editFile({
-                    filePath: getHomeRelativePath(editableFile),
-                    oldContent: 'duplicate content',
-                    newContent: 'new content',
-                });
-                expect.fail('editFile did not throw an error for non-unique oldContent');
-            } catch (error) {
-                expect(error.message).to.include('not unique');
-            }
+            await expect(editFile({
+                filePath: getHomeRelativePath(editableFile),
+                oldContent: 'duplicate content',
+                newContent: 'new content',
+            })).to.be.rejectedWith(/not unique/);
         });
     });
 
@@ -200,12 +382,7 @@ describe('File System Operations', () => {
                 filePath: testFile,
                 content: 'new content',
             };
-            try {
-                await saveContentToFile(args);
-                throw new Error('Expected error for existing file');
-            } catch (err) {
-                expect(err.message).to.include('already exists');
-            }
+            await expect(saveContentToFile(args)).to.be.rejectedWith(/already exists/);
             const fileContent = await fs.readFile(testFilePath, 'utf8');
             expect(fileContent).to.equal('original');
         });
@@ -228,12 +405,7 @@ describe('File System Operations', () => {
                 filePath: '../../outside.txt',
                 content: 'bad',
             };
-            try {
-                await saveContentToFile(args);
-                throw new Error('Expected error for restricted access');
-            } catch (err) {
-                expect(err.message).to.include('restricted');
-            }
+            await expect(saveContentToFile(args)).to.be.rejectedWith(/restricted/);
         });
     });
 
@@ -320,12 +492,7 @@ describe('File System Operations', () => {
                 format: 'docx',
                 outputPath: testMdFile.replace(homeDir + path.sep, ''),
             };
-            try {
-                await exportContent(args);
-                throw new Error('Expected error for invalid format');
-            } catch (err) {
-                expect(err.message).to.match(/invalid|unsupported/i);
-            }
+            await expect(exportContent(args)).to.be.rejectedWith(/invalid|unsupported/i);
         });
 
         it('should throw an error for invalid sourceType', async function () {
@@ -335,12 +502,7 @@ describe('File System Operations', () => {
                 format: 'md',
                 outputPath: testMdFile.replace(homeDir + path.sep, ''),
             };
-            try {
-                await exportContent(args);
-                throw new Error('Expected error for invalid sourceType');
-            } catch (err) {
-                expect(err.message).to.match(/invalid|unsupported/i);
-            }
+            await expect(exportContent(args)).to.be.rejectedWith(/invalid|unsupported/i);
         });
 
         it('should restrict export outside the home directory', async function () {
@@ -350,12 +512,7 @@ describe('File System Operations', () => {
                 format: 'md',
                 outputPath: '../../outside.md',
             };
-            try {
-                await exportContent(args);
-                throw new Error('Expected error for restricted path');
-            } catch (err) {
-                expect(err.message).to.match(/restricted|not allowed|outside|invalid/i);
-            }
+            await expect(exportContent(args)).to.be.rejectedWith(/restricted|not allowed|outside|invalid/i);
         });
     });
 
@@ -386,33 +543,20 @@ describe('Directory Operations', function () {
     });
 
     it('should not create a directory outside the home directory', async function () {
-        try {
-            await createDirectory({ directoryPath: '../../outside_dir' });
-            throw new Error('Expected error for restricted access');
-        } catch (err) {
-            expect(err.message).to.match(/restricted|not allowed|outside|invalid/i);
-        }
+        await expect(createDirectory({ directoryPath: '../../outside_dir' }))
+            .to.be.rejectedWith(/restricted|not allowed|outside|invalid/i);
     });
 
     it('should delete a directory', async function () {
         await fs.mkdir(subDir, { recursive: true });
         const result = await deleteDirectory({ directoryPath: getHomeRelativePath(subDir) });
         expect(result.content).to.include('Successfully deleted directory');
-        try {
-            await fs.stat(subDir);
-            throw new Error('Directory still exists');
-        } catch (err) {
-            expect(err.code).to.equal('ENOENT');
-        }
+        await expect(fs.stat(subDir)).to.be.rejectedWith(/ENOENT/);
     });
 
     it('should not delete a directory outside the home directory', async function () {
-        try {
-            await deleteDirectory({ directoryPath: '../../outside_dir' });
-            throw new Error('Expected error for restricted access');
-        } catch (err) {
-            expect(err.message).to.match(/restricted|not allowed|outside|invalid/i);
-        }
+        await expect(deleteDirectory({ directoryPath: '../../outside_dir' }))
+            .to.be.rejectedWith(/restricted|not allowed|outside|invalid/i);
     });
 
     it('should rename a directory', async function () {
@@ -439,24 +583,22 @@ describe('Directory Operations', function () {
 
     it('should not move a directory outside the home directory', async function () {
         await fs.mkdir(subDir, { recursive: true });
-        try {
-            await moveDirectory({
-                sourcePath: getHomeRelativePath(subDir),
-                destinationPath: '../../outside_dir'
-            });
-            throw new Error('Expected error for restricted access');
-        } catch (err) {
-            expect(err.message).to.match(/restricted|not allowed|outside|invalid/i);
-        }
+        await expect(moveDirectory({
+            sourcePath: getHomeRelativePath(subDir),
+            destinationPath: '../../outside_dir'
+        })).to.be.rejectedWith(/restricted|not allowed|outside|invalid/i);
     });
 
     it('should handle deleting a non-existent directory gracefully', async function () {
         await deleteDirectory({ directoryPath: getHomeRelativePath(path.join(baseDir, 'does_not_exist')) });
-        try {
-            await fs.stat(path.join(baseDir, 'does_not_exist'));
-            throw new Error('Directory still exists');
-        } catch (err) {
-            expect(err.code).to.equal('ENOENT');
-        }
+        await expect(fs.stat(path.join(baseDir, 'does_not_exist'))).to.be.rejectedWith(/ENOENT/);
     });
 });
+
+function getHomeRelativePath(absPath) {
+  const home = os.homedir();
+  if (absPath.startsWith(home)) {
+    return absPath.slice(home.length + 1);
+  }
+  return absPath;
+}
