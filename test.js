@@ -237,4 +237,226 @@ describe('File System Operations', () => {
         });
     });
 
+    describe('exportContent', function () {
+        const { exportContent } = require('./server');
+        const homeDir = os.homedir();
+        const testText = '# Hello Export\nThis is a test.';
+        const testMdFile = path.join(homeDir, 'Desktop', `test_exportContent_${Date.now()}.md`);
+        const testPdfFile = path.join(homeDir, 'Desktop', `test_exportContent_${Date.now()}.pdf`);
+        const testSrcFile = path.join(homeDir, 'Desktop', `test_exportContent_src_${Date.now()}.txt`);
+        const testExportedMd = path.join(homeDir, 'Desktop', `test_exportContent_exported_${Date.now()}.md`);
+        const testExportedPdf = path.join(homeDir, 'Desktop', `test_exportContent_exported_${Date.now()}.pdf`);
+
+        beforeEach(async function () {
+            // Create a source file for file export tests
+            await fs.writeFile(testSrcFile, testText);
+        });
+
+        afterEach(async function () {
+            // Clean up all test files
+            for (const file of [testMdFile, testPdfFile, testSrcFile, testExportedMd, testExportedPdf]) {
+                try { await fs.unlink(file); } catch (e) {}
+            }
+        });
+
+        it('should export text content as Markdown', async function () {
+            const args = {
+                sourceType: 'text',
+                source: testText,
+                format: 'md',
+                outputPath: testMdFile.replace(homeDir + path.sep, ''),
+            };
+            const result = await exportContent(args);
+            expect(result.content).to.include('Exported as');
+            const exported = await fs.readFile(testMdFile, 'utf8');
+            expect(exported).to.equal(testText);
+        });
+
+        it('should export text content as PDF', async function () {
+            this.timeout(10000); // 10 seconds
+            const args = {
+                sourceType: 'text',
+                source: testText,
+                format: 'pdf',
+                outputPath: testPdfFile.replace(homeDir + path.sep, ''),
+            };
+            const result = await exportContent(args);
+            expect(result.content).to.include('Exported as');
+            // Check that the PDF file exists and is not empty
+            const stat = await fs.stat(testPdfFile);
+            expect(stat.size).to.be.greaterThan(100); // PDF should not be empty
+        });
+
+        it('should export a file as Markdown', async function () {
+            const args = {
+                sourceType: 'file',
+                source: testSrcFile.replace(homeDir + path.sep, ''),
+                format: 'md',
+                outputPath: testExportedMd.replace(homeDir + path.sep, ''),
+            };
+            const result = await exportContent(args);
+            expect(result.content).to.include('Exported as');
+            const exported = await fs.readFile(testExportedMd, 'utf8');
+            expect(exported).to.equal(testText);
+        });
+
+        it('should export a file as PDF', async function () {
+            const args = {
+                sourceType: 'file',
+                source: testSrcFile.replace(homeDir + path.sep, ''),
+                format: 'pdf',
+                outputPath: testExportedPdf.replace(homeDir + path.sep, ''),
+            };
+            const result = await exportContent(args);
+            expect(result.content).to.include('Exported as');
+            const stat = await fs.stat(testExportedPdf);
+            expect(stat.size).to.be.greaterThan(100);
+        });
+
+        it('should throw an error for invalid format', async function () {
+            const args = {
+                sourceType: 'text',
+                source: testText,
+                format: 'docx',
+                outputPath: testMdFile.replace(homeDir + path.sep, ''),
+            };
+            try {
+                await exportContent(args);
+                throw new Error('Expected error for invalid format');
+            } catch (err) {
+                expect(err.message).to.match(/invalid|unsupported/i);
+            }
+        });
+
+        it('should throw an error for invalid sourceType', async function () {
+            const args = {
+                sourceType: 'blob',
+                source: testText,
+                format: 'md',
+                outputPath: testMdFile.replace(homeDir + path.sep, ''),
+            };
+            try {
+                await exportContent(args);
+                throw new Error('Expected error for invalid sourceType');
+            } catch (err) {
+                expect(err.message).to.match(/invalid|unsupported/i);
+            }
+        });
+
+        it('should restrict export outside the home directory', async function () {
+            const args = {
+                sourceType: 'text',
+                source: testText,
+                format: 'md',
+                outputPath: '../../outside.md',
+            };
+            try {
+                await exportContent(args);
+                throw new Error('Expected error for restricted path');
+            } catch (err) {
+                expect(err.message).to.match(/restricted|not allowed|outside|invalid/i);
+            }
+        });
+    });
+
+});
+
+describe('Directory Operations', function () {
+    const homeDir = os.homedir();
+    const baseDir = path.join(homeDir, 'test_dir_ops');
+    const subDir = path.join(baseDir, 'subdir');
+    const movedDir = path.join(homeDir, 'test_dir_ops_moved');
+    const renamedDir = path.join(homeDir, 'test_dir_ops_renamed');
+
+    beforeEach(async function () {
+        await fs.mkdir(baseDir, { recursive: true });
+    });
+
+    afterEach(async function () {
+        for (const dir of [baseDir, movedDir, renamedDir]) {
+            try { await fs.rm(dir, { recursive: true, force: true }); } catch (e) {}
+        }
+    });
+
+    it('should create a new directory', async function () {
+        const result = await createDirectory({ directoryPath: getHomeRelativePath(subDir) });
+        expect(result.content).to.include('Successfully created directory');
+        const stat = await fs.stat(subDir);
+        expect(stat.isDirectory()).to.be.true;
+    });
+
+    it('should not create a directory outside the home directory', async function () {
+        try {
+            await createDirectory({ directoryPath: '../../outside_dir' });
+            throw new Error('Expected error for restricted access');
+        } catch (err) {
+            expect(err.message).to.match(/restricted|not allowed|outside|invalid/i);
+        }
+    });
+
+    it('should delete a directory', async function () {
+        await fs.mkdir(subDir, { recursive: true });
+        const result = await deleteDirectory({ directoryPath: getHomeRelativePath(subDir) });
+        expect(result.content).to.include('Successfully deleted directory');
+        try {
+            await fs.stat(subDir);
+            throw new Error('Directory still exists');
+        } catch (err) {
+            expect(err.code).to.equal('ENOENT');
+        }
+    });
+
+    it('should not delete a directory outside the home directory', async function () {
+        try {
+            await deleteDirectory({ directoryPath: '../../outside_dir' });
+            throw new Error('Expected error for restricted access');
+        } catch (err) {
+            expect(err.message).to.match(/restricted|not allowed|outside|invalid/i);
+        }
+    });
+
+    it('should rename a directory', async function () {
+        await fs.mkdir(subDir, { recursive: true });
+        const result = await renameDirectory({
+            oldPath: getHomeRelativePath(subDir),
+            newPath: getHomeRelativePath(renamedDir)
+        });
+        expect(result.content).to.include('Successfully renamed directory');
+        const stat = await fs.stat(renamedDir);
+        expect(stat.isDirectory()).to.be.true;
+    });
+
+    it('should move a directory', async function () {
+        await fs.mkdir(subDir, { recursive: true });
+        const result = await moveDirectory({
+            sourcePath: getHomeRelativePath(subDir),
+            destinationPath: getHomeRelativePath(movedDir)
+        });
+        expect(result.content).to.include('Successfully moved directory');
+        const stat = await fs.stat(movedDir);
+        expect(stat.isDirectory()).to.be.true;
+    });
+
+    it('should not move a directory outside the home directory', async function () {
+        await fs.mkdir(subDir, { recursive: true });
+        try {
+            await moveDirectory({
+                sourcePath: getHomeRelativePath(subDir),
+                destinationPath: '../../outside_dir'
+            });
+            throw new Error('Expected error for restricted access');
+        } catch (err) {
+            expect(err.message).to.match(/restricted|not allowed|outside|invalid/i);
+        }
+    });
+
+    it('should handle deleting a non-existent directory gracefully', async function () {
+        await deleteDirectory({ directoryPath: getHomeRelativePath(path.join(baseDir, 'does_not_exist')) });
+        try {
+            await fs.stat(path.join(baseDir, 'does_not_exist'));
+            throw new Error('Directory still exists');
+        } catch (err) {
+            expect(err.code).to.equal('ENOENT');
+        }
+    });
 });
