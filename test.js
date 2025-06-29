@@ -1,8 +1,8 @@
 const { expect } = require('chai');
+const os = require('os');
 const path = require('path');
 const fs = require('fs').promises;
-const os = require('os');
-
+const { saveContentToFile } = require('./server');
 const { listFiles, readFile, createFile, editFile, replaceString, deleteFile, deleteDirectory, renameFile, renameDirectory, moveFile, moveDirectory, createDirectory, getFileInfo, getDirectoryInfo, appendToFile, prependToFile, searchInFile, zipDirectory, unzipFile, changePermissions, listRecentFiles, searchFiles } = require('./server.js');
 
 // Helper to get a path relative to the home directory
@@ -168,6 +168,72 @@ describe('File System Operations', () => {
             expect(result.content).to.equal(`Successfully replaced string in file at: ${replaceFile}`);
             const content = await fs.readFile(replaceFile, 'utf8');
             expect(content).to.equal('one two one three');
+        });
+    });
+
+    describe('saveContentToFile', function () {
+        const homeDir = os.homedir();
+        const testFile = path.join('Desktop', `test_saveContentToFile_${Date.now()}.txt`);
+        const testFilePath = path.join(homeDir, testFile);
+
+        afterEach(async function () {
+            // Clean up test file if it exists
+            try {
+                await fs.unlink(testFilePath);
+            } catch (e) {}
+        });
+
+        it('should save content to a new file', async function () {
+            const args = {
+                filePath: testFile,
+                content: 'Hello, MCP!',
+            };
+            const result = await saveContentToFile(args);
+            expect(result.content).to.include('Successfully saved content');
+            const fileContent = await fs.readFile(testFilePath, 'utf8');
+            expect(fileContent).to.equal('Hello, MCP!');
+        });
+
+        it('should not overwrite an existing file by default', async function () {
+            await fs.writeFile(testFilePath, 'original');
+            const args = {
+                filePath: testFile,
+                content: 'new content',
+            };
+            try {
+                await saveContentToFile(args);
+                throw new Error('Expected error for existing file');
+            } catch (err) {
+                expect(err.message).to.include('already exists');
+            }
+            const fileContent = await fs.readFile(testFilePath, 'utf8');
+            expect(fileContent).to.equal('original');
+        });
+
+        it('should overwrite an existing file if overwrite is true', async function () {
+            await fs.writeFile(testFilePath, 'original');
+            const args = {
+                filePath: testFile,
+                content: 'overwritten content',
+                overwrite: true,
+            };
+            const result = await saveContentToFile(args);
+            expect(result.content).to.include('Successfully saved content');
+            const fileContent = await fs.readFile(testFilePath, 'utf8');
+            expect(fileContent).to.equal('overwritten content');
+        });
+
+        it('should restrict access outside the home directory', async function () {
+            const args = {
+                filePath: '../../outside.txt',
+                content: 'bad',
+            };
+            try {
+                await saveContentToFile(args);
+                throw new Error('Expected error for restricted access');
+            } catch (err) {
+                expect(err.message).to.include('restricted');
+            }
         });
     });
 

@@ -8,6 +8,7 @@ const os = require('os');
 const archiver = require('archiver');
 const fse = require('fs-extra'); // For ensuring directory exists
 const yauzl = require('yauzl');
+const { FuzzyMatcher } = require('fast-fuzzy');
 
 
 /**
@@ -93,6 +94,9 @@ async function main() {
                 break;
             case 'getToolDefinition':
                 result = getToolDefinition();
+                break;
+            case 'saveContentToFile':
+                result = await saveContentToFile(args);
                 break;
             default:
                 throw new Error(`Unknown tool: ${toolName}`);
@@ -349,6 +353,18 @@ function getToolDefinition() {
                         maxSize: { type: 'number', description: 'Maximum file size in bytes.', format: 'int32' },
                         modifiedSince: { type: 'number', description: 'Timestamp (milliseconds) to find files modified after.', format: 'int64' },
                     },
+                },
+            },
+            {
+                name: 'saveContentToFile',
+                description: 'Saves provided content to a specified file. Can be used to store results from other MCPs.',
+                schema: {
+                    properties: {
+                        filePath: { type: 'string', description: 'Path for the file. e.g., "Desktop/data.txt".' },
+                        content: { type: 'string', description: 'The content to write into the file.' },
+                        overwrite: { type: 'boolean', description: 'Whether to overwrite if the file exists. Default: false.' }
+                    },
+                    required: ['filePath', 'content']
                 },
             },
         ],
@@ -796,10 +812,26 @@ async function listRecentFiles(args) {
     }
 }
 
+/**
+ * Simple fuzzy match: returns true if all characters of pattern appear in order in str (case-insensitive).
+ */
+function fuzzyMatch(str, pattern) {
+    str = str.toLowerCase();
+    pattern = pattern.toLowerCase();
+    let patternIdx = 0, strIdx = 0;
+    while (patternIdx < pattern.length && strIdx < str.length) {
+        if (pattern[patternIdx] === str[strIdx]) {
+            patternIdx++;
+        }
+        strIdx++;
+    }
+    return patternIdx === pattern.length;
+}
+
 async function searchFiles(args) {
     const homeDir = os.homedir();
     const targetPath = args.directoryPath ? path.join(homeDir, args.directoryPath) : homeDir;
-    const fileNamePattern = args.fileNamePattern ? new RegExp(args.fileNamePattern) : null;
+    const fileNamePattern = args.fileNamePattern ? args.fileNamePattern.toLowerCase() : null;
     const minSize = args.minSize || 0;
     const maxSize = args.maxSize || Infinity;
     const modifiedSince = args.modifiedSince || 0;
@@ -811,6 +843,7 @@ async function searchFiles(args) {
     try {
         const files = await fs.readdir(targetPath);
         const matchingFiles = [];
+        const matcher = fileNamePattern ? new FuzzyMatcher([fileNamePattern]) : null;
 
         for (const file of files) {
             const filePath = path.join(targetPath, file);
@@ -818,8 +851,13 @@ async function searchFiles(args) {
                 const stats = await fs.stat(filePath);
                 if (stats.isFile()) {
                     let matches = true;
-                    if (fileNamePattern && !fileNamePattern.test(file)) {
-                        matches = false;
+                    if (fileNamePattern) {
+                        // Case-insensitive substring or fuzzy match
+                        const lowerFile = file.toLowerCase();
+                        matches =
+                            lowerFile.includes(fileNamePattern) ||
+                            fuzzyMatch(lowerFile, fileNamePattern) ||
+                            (matcher && matcher.getScore(lowerFile) > 0.5); // threshold can be tuned
                     }
                     if (stats.size < minSize || stats.size > maxSize) {
                         matches = false;
@@ -850,6 +888,23 @@ async function searchFiles(args) {
     }
 }
 
+async function saveContentToFile(args) {
+    const homeDir = os.homedir();
+    const targetFile = path.join(homeDir, args.filePath);
+
+    if (!path.resolve(targetFile).startsWith(homeDir)) {
+        throw new Error('Access is restricted to your user profile directory.');
+    }
+
+    // Ensure parent directory exists
+    await fs.mkdir(path.dirname(targetFile), { recursive: true });
+
+    // Default: do not overwrite unless explicitly allowed
+    const flag = args.overwrite ? 'w' : 'wx';
+    await fs.writeFile(targetFile, args.content, { flag });
+    return { content: `Successfully saved content to file at: ${targetFile}` };
+}
+
 if (require.main === module) {
     main();
 }
@@ -878,4 +933,5 @@ module.exports = {
     listRecentFiles,
     searchFiles,
     getToolDefinition,
+    saveContentToFile,
 };
