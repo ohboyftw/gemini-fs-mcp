@@ -267,7 +267,7 @@ describe('File System Operations', () => {
                 outputPath: testMdFile.replace(homeDir + path.sep, ''),
             };
             const result = await exportContent(args);
-            expect(result.content).to.include('Exported as');
+            expect(result.content).to.include('Successfully exported');
             const exported = await fs.readFile(testMdFile, 'utf8');
             expect(exported).to.equal(testText);
         });
@@ -281,7 +281,7 @@ describe('File System Operations', () => {
                 outputPath: testPdfFile.replace(homeDir + path.sep, ''),
             };
             const result = await exportContent(args);
-            expect(result.content).to.include('Exported as');
+            expect(result.content).to.include('Successfully exported');
             // Check that the PDF file exists and is not empty
             const stat = await fs.stat(testPdfFile);
             expect(stat.size).to.be.greaterThan(100); // PDF should not be empty
@@ -295,7 +295,7 @@ describe('File System Operations', () => {
                 outputPath: testExportedMd.replace(homeDir + path.sep, ''),
             };
             const result = await exportContent(args);
-            expect(result.content).to.include('Exported as');
+            expect(result.content).to.include('Successfully exported');
             const exported = await fs.readFile(testExportedMd, 'utf8');
             expect(exported).to.equal(testText);
         });
@@ -308,7 +308,7 @@ describe('File System Operations', () => {
                 outputPath: testExportedPdf.replace(homeDir + path.sep, ''),
             };
             const result = await exportContent(args);
-            expect(result.content).to.include('Exported as');
+            expect(result.content).to.include('Successfully exported');
             const stat = await fs.stat(testExportedPdf);
             expect(stat.size).to.be.greaterThan(100);
         });

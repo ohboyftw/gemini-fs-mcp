@@ -576,34 +576,36 @@ async function createDirectory(args) {
     return { content: `Successfully created directory at: ${targetDirectory}` };
 }
 
-async function getFileInfo(args) {
-    const homeDir = os.homedir();
-    const targetFile = path.join(homeDir, args.filePath);
+async function appendToFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
 
-    if (!path.resolve(targetFile).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
+    try {
+        await fs.appendFile(targetFile, args.content);
+        return { content: `Successfully appended to file at: ${targetFile}` };
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            // Message must match /not exist|ENOENT/i
+            throw new Error(`ENOENT: File does not exist at: ${targetFile}`);
+        }
+        throw error;
     }
+}
 
+async function getFileInfo(args) {
+    const targetFile = resolveUserPath(args.filePath);
     const stats = await fs.stat(targetFile);
+    // Return top-level properties, not nested under 'content'
     return {
-        content: {
-            size: stats.size,
-            createdAt: stats.birthtime.toISOString(),
-            modifiedAt: stats.mtime.toISOString(),
-            isDirectory: stats.isDirectory(),
-            isFile: stats.isFile(),
-        },
+        size: stats.size,
+        createdAt: stats.birthtime.toISOString(),
+        modifiedAt: stats.mtime.toISOString(),
+        isDirectory: stats.isDirectory(),
+        isFile: stats.isFile(),
     };
 }
 
 async function getDirectoryInfo(args) {
-    const homeDir = os.homedir();
-    const targetDirectory = path.join(homeDir, args.directoryPath);
-
-    if (!path.resolve(targetDirectory).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
+    const targetDirectory = resolveUserPath(args.directoryPath);
     const files = await fs.readdir(targetDirectory);
     let fileCount = 0;
     let directoryCount = 0;
@@ -618,508 +620,11 @@ async function getDirectoryInfo(args) {
         }
     }
 
+    // Return top-level properties, including isDirectory
     return {
-        content: {
-            fileCount,
-            directoryCount,
-        },
-    };
-}
-
-async function appendToFile(args) {
-    const homeDir = os.homedir();
-    const targetFile = path.join(homeDir, args.filePath);
-
-    if (!path.resolve(targetFile).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    try {
-        await fs.appendFile(targetFile, args.content);
-        return { content: `Successfully appended to file at: ${targetFile}` };
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            throw new Error(`File not found at: ${targetFile}`);
-        }
-        throw error;
-    }
-}
-
-async function prependToFile(args) {
-    const homeDir = os.homedir();
-    const targetFile = path.join(homeDir, args.filePath);
-
-    if (!path.resolve(targetFile).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    try {
-        const currentContent = await fs.readFile(targetFile, 'utf8');
-        const newContent = args.content + currentContent;
-        await fs.writeFile(targetFile, newContent);
-        return { content: `Successfully prepended to file at: ${targetFile}` };
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            throw new Error(`File not found at: ${targetFile}`);
-        }
-        throw error;
-    }
-}
-
-async function searchInFile(args) {
-    const homeDir = os.homedir();
-    const targetFile = path.join(homeDir, args.filePath);
-
-    if (!path.resolve(targetFile).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    try {
-        const content = await fs.readFile(targetFile, 'utf8');
-        const lines = content.split(/\r?\n/);
-        const matchingLines = [];
-        const regex = new RegExp(args.pattern, 'g');
-
-        for (let i = 0; i < lines.length; i++) {
-            if (regex.test(lines[i])) {
-                matchingLines.push({ lineNumber: i + 1, lineContent: lines[i] });
-            }
-        }
-        return { content: matchingLines };
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            throw new Error(`File not found at: ${targetFile}`);
-        }
-        throw error;
-    }
-}
-
-async function zipDirectory(args) {
-    const homeDir = os.homedir();
-    const sourceDir = path.join(homeDir, args.directoryPath);
-    const outputPath = path.join(homeDir, args.outputPath);
-
-    if (!path.resolve(sourceDir).startsWith(homeDir) || !path.resolve(outputPath).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    try {
-        await fse.ensureDir(path.dirname(outputPath));
-
-        const output = fse.createWriteStream(outputPath);
-        const archive = archiver('zip', { zlib: { level: 9 } });
-
-        return new Promise((resolve, reject) => {
-            output.on('close', () => {
-                resolve({ content: `Successfully zipped ${sourceDir} to ${outputPath}. Total bytes: ${archive.pointer()}` });
-            });
-            archive.on('error', (err) => reject(err));
-
-            archive.pipe(output);
-            archive.directory(sourceDir, false);
-            archive.finalize();
-        });
-    } catch (error) {
-        throw error;
-    }
-}
-
-async function unzipFile(args) {
-    const homeDir = os.homedir();
-    const sourceFile = path.join(homeDir, args.filePath);
-    const destinationPath = path.join(homeDir, args.destinationPath);
-
-    if (!path.resolve(sourceFile).startsWith(homeDir) || !path.resolve(destinationPath).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    try {
-        await fse.ensureDir(destinationPath);
-
-        return new Promise((resolve, reject) => {
-            yauzl.open(sourceFile, { lazyEntries: true }, (err, zipfile) => {
-                if (err) reject(err);
-
-                zipfile.readEntry();
-
-                zipfile.on('entry', (entry) => {
-                    const entryPath = path.join(destinationPath, entry.fileName);
-
-                    if (/\/$/.test(entry.fileName)) {
-                        // Directory file names end with /
-                        fse.ensureDir(entryPath).then(() => zipfile.readEntry()).catch(reject);
-                    } else {
-                        // File
-                        zipfile.openReadStream(entry, (err, readStream) => {
-                            if (err) reject(err);
-
-                            readStream.on('end', () => {
-                                zipfile.readEntry();
-                            });
-
-                            fse.ensureDir(path.dirname(entryPath)).then(() => {
-                                const writeStream = fse.createWriteStream(entryPath);
-                                readStream.pipe(writeStream);
-                            }).catch(reject);
-                        });
-                    }
-                });
-
-                zipfile.on('end', () => {
-                    resolve({ content: `Successfully unzipped ${sourceFile} to ${destinationPath}` });
-                });
-            });
-        });
-    } catch (error) {
-        throw error;
-    }
-}
-
-async function changePermissions(args) {
-    const homeDir = os.homedir();
-    const targetPath = path.join(homeDir, args.filePath);
-
-    if (!path.resolve(targetPath).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    try {
-        await fs.chmod(targetPath, args.mode);
-        return { content: `Successfully changed permissions for ${targetPath} to ${args.mode.toString(8)}` };
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            throw new Error(`File or directory not found at: ${targetPath}`);
-        }
-        throw error;
-    }
-}
-
-async function listRecentFiles(args) {
-    const homeDir = os.homedir();
-    const targetPath = args.directoryPath ? path.join(homeDir, args.directoryPath) : homeDir;
-    const limit = args.limit || 10;
-
-    if (!path.resolve(targetPath).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    try {
-        const files = await fs.readdir(targetPath);
-        const fileStats = [];
-
-        for (const file of files) {
-            const filePath = path.join(targetPath, file);
-            try {
-                const stats = await fs.stat(filePath);
-                if (stats.isFile()) {
-                    fileStats.push({ name: file, modifiedAt: stats.mtime.getTime() });
-                }
-            } catch (error) {
-                // Ignore errors for files that might have been deleted between readdir and stat
-            }
-        }
-
-        fileStats.sort((a, b) => b.modifiedAt - a.modifiedAt);
-
-        return { content: fileStats.slice(0, limit) };
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            throw new Error(`Directory not found at: ${targetPath}`);
-        }
-        throw error;
-    }
-}
-
-/**
- * Simple fuzzy match: returns true if all characters of pattern appear in order in str (case-insensitive).
- */
-function fuzzyMatch(str, pattern) {
-    str = str.toLowerCase();
-    pattern = pattern.toLowerCase();
-    let patternIdx = 0, strIdx = 0;
-    while (patternIdx < pattern.length && strIdx < str.length) {
-        if (pattern[patternIdx] === str[strIdx]) {
-            patternIdx++;
-        }
-        strIdx++;
-    }
-    return patternIdx === pattern.length;
-}
-
-async function searchFiles(args) {
-    const homeDir = os.homedir();
-    const targetPath = args.directoryPath ? path.join(homeDir, args.directoryPath) : homeDir;
-    const fileNamePattern = args.fileNamePattern ? args.fileNamePattern.toLowerCase() : null;
-    const minSize = args.minSize || 0;
-    const maxSize = args.maxSize || Infinity;
-    const modifiedSince = args.modifiedSince || 0;
-
-    if (!path.resolve(targetPath).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    try {
-        const files = await fs.readdir(targetPath);
-        const matchingFiles = [];
-        const matcher = fileNamePattern ? new FuzzyMatcher([fileNamePattern]) : null;
-
-        for (const file of files) {
-            const filePath = path.join(targetPath, file);
-            try {
-                const stats = await fs.stat(filePath);
-                if (stats.isFile()) {
-                    let matches = true;
-                    if (fileNamePattern) {
-                        // Case-insensitive substring or fuzzy match
-                        const lowerFile = file.toLowerCase();
-                        matches =
-                            lowerFile.includes(fileNamePattern) ||
-                            fuzzyMatch(lowerFile, fileNamePattern) ||
-                            (matcher && matcher.getScore(lowerFile) > 0.5); // threshold can be tuned
-                    }
-                    if (stats.size < minSize || stats.size > maxSize) {
-                        matches = false;
-                    }
-                    if (stats.mtime.getTime() < modifiedSince) {
-                        matches = false;
-                    }
-
-                    if (matches) {
-                        matchingFiles.push({
-                            name: file,
-                            path: filePath,
-                            size: stats.size,
-                            modifiedAt: stats.mtime.toISOString(),
-                        });
-                    }
-                }
-            } catch (error) {
-                // Ignore errors for files that might have been deleted between readdir and stat
-            }
-        }
-        return { content: matchingFiles };
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            throw new Error(`Directory not found at: ${targetPath}`);
-        }
-        throw error;
-    }
-}
-
-async function saveContentToFile(args) {
-    const homeDir = os.homedir();
-    const targetFile = path.join(homeDir, args.filePath);
-
-    if (!path.resolve(targetFile).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    // Ensure parent directory exists
-    await fs.mkdir(path.dirname(targetFile), { recursive: true });
-
-    // Default: do not overwrite unless explicitly allowed
-    const flag = args.overwrite ? 'w' : 'wx';
-    await fs.writeFile(targetFile, args.content, { flag });
-    return { content: `Successfully saved content to file at: ${targetFile}` };
-}
-
-async function exportContent(args) {
-    const homeDir = os.homedir();
-    const { sourceType, source, format, outputPath } = args;
-    const absOutput = path.join(homeDir, outputPath);
-
-    if (!path.resolve(absOutput).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    // Ensure parent directory exists
-    await fs.mkdir(path.dirname(absOutput), { recursive: true });
-
-    let markdownContent = '';
-    if (sourceType === 'text') {
-        markdownContent = source;
-    } else if (sourceType === 'file') {
-        const absSource = path.join(homeDir, source);
-        if (!path.resolve(absSource).startsWith(homeDir)) {
-            throw new Error('Access is restricted to your user profile directory.');
-        }
-        markdownContent = await fs.readFile(absSource, 'utf8');
-    } else {
-        throw new Error('Invalid sourceType. Use "text" or "file".');
-    }
-
-    if (format === 'md') {
-        await fs.writeFile(absOutput, markdownContent, { flag: 'w' });
-        return { content: `Exported as markdown: ${absOutput}` };
-    } else if (format === 'pdf') {
-        const md = new MarkdownIt();
-        const html = md.render(markdownContent);
-
-        const browser = await puppeteer.launch();
-        const page = await browser.newPage();
-        await page.setContent(html, { waitUntil: 'networkidle0' });
-        await page.pdf({ path: absOutput, format: 'A4' });
-        await browser.close();
-
-        return { content: `Exported as PDF: ${absOutput}` };
-    } else {
-        throw new Error('Invalid format. Use "md" or "pdf".');
-    }
-}
-
-/**
- * Securely resolve a user-supplied path relative to the home directory.
- * Throws if the path is outside the home directory or contains path traversal.
- */
-function resolveUserPath(userPath) {
-    const homeDir = os.homedir();
-    // Disallow absolute paths, UNC, or path traversal
-    if (path.isAbsolute(userPath) || userPath.includes('..') || userPath.startsWith('\\\\')) {
-        throw new Error('Invalid or potentially unsafe path.');
-    }
-    const absPath = path.resolve(homeDir, userPath);
-    const normalizedHome = path.normalize(homeDir + path.sep);
-    const normalizedAbs = path.normalize(absPath + path.sep);
-    if (!normalizedAbs.startsWith(normalizedHome)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-    return absPath;
-}
-
-// Example usage in functions:
-async function createFile(args) {
-    const targetFile = resolveUserPath(args.filePath);
-    try {
-        await fs.writeFile(targetFile, args.content, { flag: 'wx' });
-    } catch (err) {
-        if (err.code === 'EEXIST') {
-            throw new Error('File already exists');
-        }
-        throw err;
-    }
-    return { content: `Successfully created file at: ${targetFile}` };
-}
-
-async function editFile(args) {
-    const targetFile = resolveUserPath(args.filePath);
-
-    const content = await fs.readFile(targetFile, 'utf8');
-
-    const occurrences = (content.match(new RegExp(args.oldContent, 'g')) || []).length;
-    if (occurrences === 0) {
-        throw new Error(`The oldContent was not found. No changes made to file at: ${targetFile}`);
-    }
-    if (occurrences > 1) {
-        throw new Error(`The oldContent is not unique in the file. Found ${occurrences} occurrences.`);
-    }
-
-    const newContent = content.replace(args.oldContent, args.newContent);
-
-    await fs.writeFile(targetFile, newContent);
-    return { content: `Successfully edited file at: ${targetFile}` };
-}
-
-async function replaceString(args) {
-    const targetFile = resolveUserPath(args.filePath);
-
-    const content = await fs.readFile(targetFile, 'utf8');
-
-    const newContent = content.replace(new RegExp(args.oldString, 'g'), args.newString);
-
-    await fs.writeFile(targetFile, newContent);
-    return { content: `Successfully replaced string in file at: ${targetFile}` };
-}
-
-async function deleteFile(args) {
-    const targetFile = resolveUserPath(args.filePath);
-
-    await fs.unlink(targetFile);
-    return { content: `Successfully deleted file at: ${targetFile}` };
-}
-
-async function deleteDirectory(args) {
-    const targetDirectory = resolveUserPath(args.directoryPath);
-
-    await fs.rm(targetDirectory, { recursive: true, force: true });
-    return { content: `Successfully deleted directory at: ${targetDirectory}` };
-}
-
-async function renameFile(args) {
-    const oldPath = resolveUserPath(args.oldPath);
-    const newPath = resolveUserPath(args.newPath);
-
-    await fs.rename(oldPath, newPath);
-    return { content: `Successfully renamed ${oldPath} to ${newPath}` };
-}
-
-async function renameDirectory(args) {
-    const oldPath = resolveUserPath(args.oldPath);
-    const newPath = resolveUserPath(args.newPath);
-
-    await fs.rename(oldPath, newPath);
-    return { content: `Successfully renamed directory ${oldPath} to ${newPath}` };
-}
-
-async function moveFile(args) {
-    const sourcePath = resolveUserPath(args.sourcePath);
-    const destinationPath = resolveUserPath(args.destinationPath);
-
-    await fs.rename(sourcePath, destinationPath);
-    return { content: `Successfully moved file from ${sourcePath} to ${destinationPath}` };
-}
-
-async function moveDirectory(args) {
-    const sourcePath = resolveUserPath(args.sourcePath);
-    const destinationPath = resolveUserPath(args.destinationPath);
-
-    await fs.rename(sourcePath, destinationPath);
-    return { content: `Successfully moved directory from ${sourcePath} to ${destinationPath}` };
-}
-
-async function createDirectory(args) {
-    const targetDirectory = resolveUserPath(args.directoryPath);
-
-    await fs.mkdir(targetDirectory, { recursive: true });
-    return { content: `Successfully created directory at: ${targetDirectory}` };
-}
-
-async function getFileInfo(args) {
-    const targetFile = resolveUserPath(args.filePath);
-
-    const stats = await fs.stat(targetFile);
-    return {
-        content: {
-            size: stats.size,
-            createdAt: stats.birthtime.toISOString(),
-            modifiedAt: stats.mtime.toISOString(),
-            isDirectory: stats.isDirectory(),
-            isFile: stats.isFile(),
-        },
-    };
-}
-
-async function getDirectoryInfo(args) {
-    const targetDirectory = resolveUserPath(args.directoryPath);
-
-    const files = await fs.readdir(targetDirectory);
-    let fileCount = 0;
-    let directoryCount = 0;
-
-    for (const file of files) {
-        const itemPath = path.join(targetDirectory, file);
-        const stats = await fs.stat(itemPath);
-        if (stats.isFile()) {
-            fileCount++;
-        } else if (stats.isDirectory()) {
-            directoryCount++;
-        }
-    }
-
-    return {
-        content: {
-            fileCount,
-            directoryCount,
-        },
+        isDirectory: true,
+        fileCount,
+        directoryCount,
     };
 }
 
@@ -1131,7 +636,8 @@ async function appendToFile(args) {
         return { content: `Successfully appended to file at: ${targetFile}` };
     } catch (error) {
         if (error.code === 'ENOENT') {
-            throw new Error(`File not found at: ${targetFile}`);
+            // Message must match /not exist|ENOENT/i
+            throw new Error(`ENOENT: File does not exist at: ${targetFile}`);
         }
         throw error;
     }
@@ -1147,7 +653,7 @@ async function prependToFile(args) {
         return { content: `Successfully prepended to file at: ${targetFile}` };
     } catch (error) {
         if (error.code === 'ENOENT') {
-            throw new Error(`File not found at: ${targetFile}`);
+            throw new Error(`ENOENT: File does not exist at: ${targetFile}`);
         }
         throw error;
     }
@@ -1262,18 +768,11 @@ async function changePermissions(args) {
 }
 
 async function listRecentFiles(args) {
-    const homeDir = os.homedir();
-    const targetPath = args.directoryPath ? path.join(homeDir, args.directoryPath) : homeDir;
+    const targetPath = args.directoryPath ? resolveUserPath(args.directoryPath) : os.homedir();
     const limit = args.limit || 10;
-
-    if (!path.resolve(targetPath).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
     try {
         const files = await fs.readdir(targetPath);
         const fileStats = [];
-
         for (const file of files) {
             const filePath = path.join(targetPath, file);
             try {
@@ -1285,9 +784,7 @@ async function listRecentFiles(args) {
                 // Ignore errors for files that might have been deleted between readdir and stat
             }
         }
-
         fileStats.sort((a, b) => b.modifiedAt - a.modifiedAt);
-
         return { content: fileStats.slice(0, limit) };
     } catch (error) {
         if (error.code === 'ENOENT') {
@@ -1314,22 +811,15 @@ function fuzzyMatch(str, pattern) {
 }
 
 async function searchFiles(args) {
-    const homeDir = os.homedir();
-    const targetPath = args.directoryPath ? path.join(homeDir, args.directoryPath) : homeDir;
+    const targetPath = args.directoryPath ? resolveUserPath(args.directoryPath) : os.homedir();
     const fileNamePattern = args.fileNamePattern ? args.fileNamePattern.toLowerCase() : null;
     const minSize = args.minSize || 0;
     const maxSize = args.maxSize || Infinity;
     const modifiedSince = args.modifiedSince || 0;
-
-    if (!path.resolve(targetPath).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
     try {
         const files = await fs.readdir(targetPath);
         const matchingFiles = [];
         const matcher = fileNamePattern ? new FuzzyMatcher([fileNamePattern]) : null;
-
         for (const file of files) {
             const filePath = path.join(targetPath, file);
             try {
@@ -1337,12 +827,11 @@ async function searchFiles(args) {
                 if (stats.isFile()) {
                     let matches = true;
                     if (fileNamePattern) {
-                        // Case-insensitive substring or fuzzy match
                         const lowerFile = file.toLowerCase();
                         matches =
                             lowerFile.includes(fileNamePattern) ||
                             fuzzyMatch(lowerFile, fileNamePattern) ||
-                            (matcher && matcher.getScore(lowerFile) > 0.5); // threshold can be tuned
+                            (matcher && matcher.getScore(lowerFile) > 0.5);
                     }
                     if (stats.size < minSize || stats.size > maxSize) {
                         matches = false;
@@ -1350,7 +839,6 @@ async function searchFiles(args) {
                     if (stats.mtime.getTime() < modifiedSince) {
                         matches = false;
                     }
-
                     if (matches) {
                         matchingFiles.push({
                             name: file,
@@ -1374,61 +862,458 @@ async function searchFiles(args) {
 }
 
 async function saveContentToFile(args) {
-    const homeDir = os.homedir();
-    const targetFile = path.join(homeDir, args.filePath);
-
-    if (!path.resolve(targetFile).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    // Ensure parent directory exists
+    const targetFile = resolveUserPath(args.filePath);
     await fs.mkdir(path.dirname(targetFile), { recursive: true });
-
-    // Default: do not overwrite unless explicitly allowed
     const flag = args.overwrite ? 'w' : 'wx';
     await fs.writeFile(targetFile, args.content, { flag });
     return { content: `Successfully saved content to file at: ${targetFile}` };
 }
 
 async function exportContent(args) {
-    const homeDir = os.homedir();
-    const { sourceType, source, format, outputPath } = args;
-    const absOutput = path.join(homeDir, outputPath);
-
-    if (!path.resolve(absOutput).startsWith(homeDir)) {
-        throw new Error('Access is restricted to your user profile directory.');
-    }
-
-    // Ensure parent directory exists
+    const absOutput = resolveUserPath(args.outputPath);
     await fs.mkdir(path.dirname(absOutput), { recursive: true });
-
     let markdownContent = '';
-    if (sourceType === 'text') {
-        markdownContent = source;
-    } else if (sourceType === 'file') {
-        const absSource = path.join(homeDir, source);
-        if (!path.resolve(absSource).startsWith(homeDir)) {
-            throw new Error('Access is restricted to your user profile directory.');
-        }
+    if (args.sourceType === 'text') {
+        markdownContent = args.source;
+    } else if (args.sourceType === 'file') {
+        const absSource = resolveUserPath(args.source);
         markdownContent = await fs.readFile(absSource, 'utf8');
     } else {
         throw new Error('Invalid sourceType. Use "text" or "file".');
     }
-
-    if (format === 'md') {
+    if (args.format === 'md') {
         await fs.writeFile(absOutput, markdownContent, { flag: 'w' });
-        return { content: `Exported as markdown: ${absOutput}` };
-    } else if (format === 'pdf') {
+        return { content: `Successfully exported as markdown: ${absOutput}` };
+    } else if (args.format === 'pdf') {
         const md = new MarkdownIt();
         const html = md.render(markdownContent);
-
         const browser = await puppeteer.launch();
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
         await page.pdf({ path: absOutput, format: 'A4' });
         await browser.close();
+        return { content: `Successfully exported as PDF: ${absOutput}` };
+    } else {
+        throw new Error('Invalid format. Use "md" or "pdf".');
+    }
+}
 
-        return { content: `Exported as PDF: ${absOutput}` };
+/**
+ * Securely resolve a user-supplied path relative to the home directory.
+ * Throws if the path is outside the home directory or contains path traversal.
+ */
+function resolveUserPath(userPath) {
+    const homeDir = os.homedir();
+    // Disallow absolute paths, UNC, or path traversal
+    if (typeof userPath !== 'string' || path.isAbsolute(userPath) || userPath.includes('..') || userPath.startsWith('\\\\')) {
+        throw new Error('Access is restricted to your user profile directory.');
+    }
+    const absPath = path.resolve(homeDir, userPath);
+    const normalizedHome = path.normalize(homeDir + path.sep);
+    const normalizedAbs = path.normalize(absPath + path.sep);
+    if (!normalizedAbs.startsWith(normalizedHome)) {
+        throw new Error('Access is restricted to your user profile directory.');
+    }
+    return absPath;
+}
+
+// Centralized path validation: All user-supplied paths must use resolveUserPath
+
+async function listFiles(args) {
+    const targetPath = args.directoryPath ? resolveUserPath(args.directoryPath) : os.homedir();
+    const files = await fs.readdir(targetPath);
+    return { files: files };
+}
+
+async function readFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+    const content = await fs.readFile(targetFile, 'utf8');
+    return { content: content };
+}
+
+async function createFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+    try {
+        await fs.writeFile(targetFile, args.content, { flag: 'wx' });
+    } catch (err) {
+        if (err.code === 'EEXIST') {
+            throw new Error('File already exists');
+        }
+        throw err;
+    }
+    return { content: `Successfully created file at: ${targetFile}` };
+}
+
+async function editFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+    const content = await fs.readFile(targetFile, 'utf8');
+    const occurrences = (content.match(new RegExp(args.oldContent, 'g')) || []).length;
+    if (occurrences === 0) {
+        throw new Error(`The oldContent was not found. No changes made to file at: ${targetFile}`);
+    }
+    if (occurrences > 1) {
+        throw new Error(`The oldContent is not unique in the file. Found ${occurrences} occurrences.`);
+    }
+    const newContent = content.replace(args.oldContent, args.newContent);
+    await fs.writeFile(targetFile, newContent);
+    return { content: `Successfully edited file at: ${targetFile}` };
+}
+
+async function replaceString(args) {
+    const targetFile = resolveUserPath(args.filePath);
+    const content = await fs.readFile(targetFile, 'utf8');
+    const newContent = content.replace(new RegExp(args.oldString, 'g'), args.newString);
+    await fs.writeFile(targetFile, newContent);
+    return { content: `Successfully replaced string in file at: ${targetFile}` };
+}
+
+async function deleteFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+    await fs.unlink(targetFile);
+    return { content: `Successfully deleted file at: ${targetFile}` };
+}
+
+async function deleteDirectory(args) {
+    const targetDirectory = resolveUserPath(args.directoryPath);
+    await fs.rm(targetDirectory, { recursive: true, force: true });
+    return { content: `Successfully deleted directory at: ${targetDirectory}` };
+}
+
+async function renameFile(args) {
+    const oldPath = resolveUserPath(args.oldPath);
+    const newPath = resolveUserPath(args.newPath);
+    await fs.rename(oldPath, newPath);
+    return { content: `Successfully renamed ${oldPath} to ${newPath}` };
+}
+
+async function renameDirectory(args) {
+    const oldPath = resolveUserPath(args.oldPath);
+    const newPath = resolveUserPath(args.newPath);
+    await fs.rename(oldPath, newPath);
+    return { content: `Successfully renamed directory ${oldPath} to ${newPath}` };
+}
+
+async function moveFile(args) {
+    const sourcePath = resolveUserPath(args.sourcePath);
+    const destinationPath = resolveUserPath(args.destinationPath);
+    await fs.rename(sourcePath, destinationPath);
+    return { content: `Successfully moved file from ${sourcePath} to ${destinationPath}` };
+}
+
+async function moveDirectory(args) {
+    const sourcePath = resolveUserPath(args.sourcePath);
+    const destinationPath = resolveUserPath(args.destinationPath);
+    await fs.rename(sourcePath, destinationPath);
+    return { content: `Successfully moved directory from ${sourcePath} to ${destinationPath}` };
+}
+
+async function createDirectory(args) {
+    const targetDirectory = resolveUserPath(args.directoryPath);
+    await fs.mkdir(targetDirectory, { recursive: true });
+    return { content: `Successfully created directory at: ${targetDirectory}` };
+}
+
+async function appendToFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+
+    try {
+        await fs.appendFile(targetFile, args.content);
+        return { content: `Successfully appended to file at: ${targetFile}` };
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            // Message must match /not exist|ENOENT/i
+            throw new Error(`ENOENT: File does not exist at: ${targetFile}`);
+        }
+        throw error;
+    }
+}
+
+async function getFileInfo(args) {
+    const targetFile = resolveUserPath(args.filePath);
+    const stats = await fs.stat(targetFile);
+    // Return top-level properties, not nested under 'content'
+    return {
+        size: stats.size,
+        createdAt: stats.birthtime.toISOString(),
+        modifiedAt: stats.mtime.toISOString(),
+        isDirectory: stats.isDirectory(),
+        isFile: stats.isFile(),
+    };
+}
+
+async function getDirectoryInfo(args) {
+    const targetDirectory = resolveUserPath(args.directoryPath);
+    const files = await fs.readdir(targetDirectory);
+    let fileCount = 0;
+    let directoryCount = 0;
+
+    for (const file of files) {
+        const itemPath = path.join(targetDirectory, file);
+        const stats = await fs.stat(itemPath);
+        if (stats.isFile()) {
+            fileCount++;
+        } else if (stats.isDirectory()) {
+            directoryCount++;
+        }
+    }
+
+    // Return top-level properties, including isDirectory
+    return {
+        isDirectory: true,
+        fileCount,
+        directoryCount,
+    };
+}
+
+async function appendToFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+
+    try {
+        await fs.appendFile(targetFile, args.content);
+        return { content: `Successfully appended to file at: ${targetFile}` };
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            // Message must match /not exist|ENOENT/i
+            throw new Error(`ENOENT: File does not exist at: ${targetFile}`);
+        }
+        throw error;
+    }
+}
+
+async function prependToFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+
+    try {
+        const currentContent = await fs.readFile(targetFile, 'utf8');
+        const newContent = args.content + currentContent;
+        await fs.writeFile(targetFile, newContent);
+        return { content: `Successfully prepended to file at: ${targetFile}` };
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            throw new Error(`ENOENT: File does not exist at: ${targetFile}`);
+        }
+        throw error;
+    }
+}
+
+async function searchInFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+
+    try {
+        const content = await fs.readFile(targetFile, 'utf8');
+        const lines = content.split(/\r?\n/);
+        const matchingLines = [];
+        const regex = new RegExp(args.pattern, 'g');
+
+        for (let i = 0; i < lines.length; i++) {
+            if (regex.test(lines[i])) {
+                matchingLines.push({ lineNumber: i + 1, lineContent: lines[i] });
+            }
+        }
+        return { content: matchingLines };
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            throw new Error(`File not found at: ${targetFile}`);
+        }
+        throw error;
+    }
+}
+
+async function zipDirectory(args) {
+    const sourceDir = resolveUserPath(args.directoryPath);
+    const outputPath = resolveUserPath(args.outputPath);
+
+    try {
+        await fse.ensureDir(path.dirname(outputPath));
+
+        const output = fse.createWriteStream(outputPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+
+        return new Promise((resolve, reject) => {
+            output.on('close', () => {
+                resolve({ content: `Successfully zipped ${sourceDir} to ${outputPath}. Total bytes: ${archive.pointer()}` });
+            });
+            archive.on('error', (err) => reject(err));
+
+            archive.pipe(output);
+            archive.directory(sourceDir, false);
+            archive.finalize();
+        });
+    } catch (error) {
+        throw error;
+    }
+}
+
+async function unzipFile(args) {
+    const sourceFile = resolveUserPath(args.filePath);
+    const destinationPath = resolveUserPath(args.destinationPath);
+
+    try {
+        await fse.ensureDir(destinationPath);
+
+        return new Promise((resolve, reject) => {
+            yauzl.open(sourceFile, { lazyEntries: true }, (err, zipfile) => {
+                if (err) reject(err);
+
+                zipfile.readEntry();
+
+                zipfile.on('entry', (entry) => {
+                    const entryPath = path.join(destinationPath, entry.fileName);
+
+                    if (/\/$/.test(entry.fileName)) {
+                        // Directory file names end with /
+                        fse.ensureDir(entryPath).then(() => zipfile.readEntry()).catch(reject);
+                    } else {
+                        // File
+                        zipfile.openReadStream(entry, (err, readStream) => {
+                            if (err) reject(err);
+
+                            readStream.on('end', () => {
+                                zipfile.readEntry();
+                            });
+
+                            fse.ensureDir(path.dirname(entryPath)).then(() => {
+                                const writeStream = fse.createWriteStream(entryPath);
+                                readStream.pipe(writeStream);
+                            }).catch(reject);
+                        });
+                    }
+                });
+
+                zipfile.on('end', () => {
+                    resolve({ content: `Successfully unzipped ${sourceFile} to ${destinationPath}` });
+                });
+            });
+        });
+    } catch (error) {
+        throw error;
+    }
+}
+
+async function changePermissions(args) {
+    const targetPath = resolveUserPath(args.filePath);
+
+    try {
+        await fs.chmod(targetPath, args.mode);
+        return { content: `Successfully changed permissions for ${targetPath} to ${args.mode.toString(8)}` };
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            throw new Error(`File or directory not found at: ${targetPath}`);
+        }
+        throw error;
+    }
+}
+
+async function listRecentFiles(args) {
+    const targetPath = args.directoryPath ? resolveUserPath(args.directoryPath) : os.homedir();
+    const limit = args.limit || 10;
+    try {
+        const files = await fs.readdir(targetPath);
+        const fileStats = [];
+        for (const file of files) {
+            const filePath = path.join(targetPath, file);
+            try {
+                const stats = await fs.stat(filePath);
+                if (stats.isFile()) {
+                    fileStats.push({ name: file, modifiedAt: stats.mtime.getTime() });
+                }
+            } catch (error) {
+                // Ignore errors for files that might have been deleted between readdir and stat
+            }
+        }
+        fileStats.sort((a, b) => b.modifiedAt - a.modifiedAt);
+        return { content: fileStats.slice(0, limit) };
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            throw new Error(`Directory not found at: ${targetPath}`);
+        }
+        throw error;
+    }
+}
+
+async function searchFiles(args) {
+    const targetPath = args.directoryPath ? resolveUserPath(args.directoryPath) : os.homedir();
+    const fileNamePattern = args.fileNamePattern ? args.fileNamePattern.toLowerCase() : null;
+    const minSize = args.minSize || 0;
+    const maxSize = args.maxSize || Infinity;
+    const modifiedSince = args.modifiedSince || 0;
+    try {
+        const files = await fs.readdir(targetPath);
+        const matchingFiles = [];
+        const matcher = fileNamePattern ? new FuzzyMatcher([fileNamePattern]) : null;
+        for (const file of files) {
+            const filePath = path.join(targetPath, file);
+            try {
+                const stats = await fs.stat(filePath);
+                if (stats.isFile()) {
+                    let matches = true;
+                    if (fileNamePattern) {
+                        const lowerFile = file.toLowerCase();
+                        matches =
+                            lowerFile.includes(fileNamePattern) ||
+                            fuzzyMatch(lowerFile, fileNamePattern) ||
+                            (matcher && matcher.getScore(lowerFile) > 0.5);
+                    }
+                    if (stats.size < minSize || stats.size > maxSize) {
+                        matches = false;
+                    }
+                    if (stats.mtime.getTime() < modifiedSince) {
+                        matches = false;
+                    }
+                    if (matches) {
+                        matchingFiles.push({
+                            name: file,
+                            path: filePath,
+                            size: stats.size,
+                            modifiedAt: stats.mtime.toISOString(),
+                        });
+                    }
+                }
+            } catch (error) {
+                // Ignore errors for files that might have been deleted between readdir and stat
+            }
+        }
+        return { content: matchingFiles };
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            throw new Error(`Directory not found at: ${targetPath}`);
+        }
+        throw error;
+    }
+}
+
+async function saveContentToFile(args) {
+    const targetFile = resolveUserPath(args.filePath);
+    await fs.mkdir(path.dirname(targetFile), { recursive: true });
+    const flag = args.overwrite ? 'w' : 'wx';
+    await fs.writeFile(targetFile, args.content, { flag });
+    return { content: `Successfully saved content to file at: ${targetFile}` };
+}
+
+async function exportContent(args) {
+    const absOutput = resolveUserPath(args.outputPath);
+    await fs.mkdir(path.dirname(absOutput), { recursive: true });
+    let markdownContent = '';
+    if (args.sourceType === 'text') {
+        markdownContent = args.source;
+    } else if (args.sourceType === 'file') {
+        const absSource = resolveUserPath(args.source);
+        markdownContent = await fs.readFile(absSource, 'utf8');
+    } else {
+        throw new Error('Invalid sourceType. Use "text" or "file".');
+    }
+    if (args.format === 'md') {
+        await fs.writeFile(absOutput, markdownContent, { flag: 'w' });
+        return { content: `Successfully exported as markdown: ${absOutput}` };
+    } else if (args.format === 'pdf') {
+        const md = new MarkdownIt();
+        const html = md.render(markdownContent);
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
+        await page.setContent(html, { waitUntil: 'networkidle0' });
+        await page.pdf({ path: absOutput, format: 'A4' });
+        await browser.close();
+        return { content: `Successfully exported as PDF: ${absOutput}` };
     } else {
         throw new Error('Invalid format. Use "md" or "pdf".');
     }
