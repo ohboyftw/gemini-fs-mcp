@@ -2,6 +2,7 @@
 
 // Node's built-in modules for file system and path manipulation
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const path = require('path');
 const os = require('os');
 const archiver = require('archiver');
@@ -400,8 +401,16 @@ async function createFile(args) {
     if (!path.resolve(targetFile).startsWith(homeDir)) {
         throw new Error('Access is restricted to your user profile directory.');
     }
-    // Use 'wx' flag to fail if the file already exists
-    await fs.writeFile(targetFile, args.content, { flag: 'wx' });
+
+    try {
+        // Use 'wx' flag to fail if the file already exists
+        await fs.writeFile(targetFile, args.content, { flag: 'wx' });
+    } catch (err) {
+        if (err.code === 'EEXIST') {
+            throw new Error('File already exists');
+        }
+        throw err;
+    }
     return { content: `Successfully created file at: ${targetFile}` };
 }
 
